@@ -1,0 +1,1424 @@
+---
+title: "Predicting Student Dropout in Higher Education using Bayesian Multilevel Models"
+author: 
+  Group assignment
+  My contribution is dataset selection, Sections 2 to 5: Model 4, and Section 6: Interpretation of parameters
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    theme: readable
+    toc: true
+    toc_depth: 4
+    toc_float: true
+    code_download: false
+---
+
+```{r setup, include = FALSE}
+options(max.print= 10000,
+        width = 120,
+        tibble.width = 120)
+knitr::opts_chunk$set(echo= TRUE,
+                      cache=FALSE,
+                      prompt=FALSE,
+                      tidy="styler",
+                      comment=NA,
+                      message=FALSE,
+                      warning=TRUE)
+
+knitr::opts_knit$set(width=90)
+knitr::opts_chunk$set(cache.extra = knitr::rand_seed)
+set.seed(42)
+```
+
+# Checklist {-}
+
+The submission includes the following.
+
+- [ ] RMD document where it's clear what is the code that corresponds to each question. 
+- [ ] Dataset
+- [ ] html/PDF document with the following
+    - [ ] Numbered questions and answers with text and all the necessary code.
+    - [ ] Subtitle indicates the group number 
+    - [ ] Name of all group members
+    - [ ] Details of specification of the work done by group members (e.g., who found the data, who did the pre-processing, who answered which questions, etc).
+    - [ ] Statement of technology. Did you use any AI tools? How?
+
+
+# Group project {-}
+
+For the project, we use the following packages:
+
+```{r, message = FALSE}
+library(brms)
+library(dplyr)
+library(loo)
+library(priorsense)
+library(rstan)
+library(shinystan)
+library(posterior)
+library(ggplot2)
+library(projpred)
+library(bayesplot)
+library(styler)
+library(gt)
+```
+
+## 1. Dataset Selection (0.5pt)
+Select a dataset with clusters such as schools, regions, or people with multiple 
+observations per individual. (From for example, https://www.kaggle.com/) It would 
+be a good idea to choose a smallish dataset (not too many rows, e.g., less than 1000) 
+or subset it so that fitting the models doesn't take too long. 
+
+a. Describe the dataset with a couple of short sentences. What was its intended use? 
+Are there papers that reference it? Provide information on how to obtain the dataset, 
+including its source and any necessary preprocessing steps/feature engineering.
+
+
+<!-- DESCRIBE IT BELOW -->
+
+The dataset was built as part of a Portuguese national project aiming to combat 
+student dropout and academic failure in universities (Pereira & Mendes-Moreira, 2022). 
+It gathers information from 4,424 undergraduate students with different backgrounds 
+across 8 study programs, namely Agronomy, Design, Education, Nursing, Journalism, 
+Management, Social Service, and Technologies. By identifying students at risk of 
+failure at an early stage, strategies to support them can be implemented in a timely 
+manner. This dataset was originally used in the paper “Early Prediction of Student's 
+Performance in Higher Education: A Case Study”, published in 2021 by a Portuguese 
+institution. Given this, our task is guided by the following research question: 
+To what extent can we accurately predict student dropout in Higher Education given 
+demographic, socioeconomic and academic data?
+
+The researcher group had already performed data cleaning by handling outliers, 
+inconsistent entries, anomalies, and missing values, so only minor preprocessing 
+steps are needed to make the dataset more aligned with the research objective and 
+requirement. The dataset can be accessed via the link in Appendix A below.
+
+Pre-processing for this project involved firstly reconstructing the target variable 
+to fit the binary classification task by performing listwise deletion of observations 
+corresponding to the “enrolled” class leaving just two outcome classes, namely; 
+“dropout” and “graduate”, which were later encoded. Subsequently, numerical predictors 
+were scaled while categorical predictors were factored to avoid bias. Additionally, 
+we sampled 30% of the dataset to reduce computational expenses. Infrequent levels 
+for all categorical variables were either reclassified or removed to facilitate 
+successful model evaluation using K-Fold cross validation. The sampled dataset was 
+later split using an 80-20 train test split. Variable selection was then performed 
+using projpred on the training set to inform the specification of models 3 and 4 
+in order to reduce model complexity and enhance interpretability. A description of 
+the variable selection process and codes used can be found in Appendix C to F below.
+
+```{r, message = FALSE, results = "hide"}
+# 1. Read the dataset
+sdac <- read.csv('SDAC.csv')
+```
+
+```{r message=FALSE, results="hide"}
+# 2. Apply pre-processing to the original dataset
+sdac_proc <- sdac %>%
+  filter(target != "Enrolled") %>% # filter out category Enrolled
+  # Convert target to binary representation
+  mutate(target_n = ifelse(target == "Graduate", 0, 1)) %>% 
+  select(-target) %>% # Remove the previous target column
+  # Convert categorical predictors into factors and scale continuous
+  mutate(Marital.Status = as.factor(Marital.Status), 
+         Application.mode = as.factor(Application.mode), 
+         Application.order = as.factor(Application.order), 
+         Course = as.factor(Course), 
+         Daytime.evening.attendance = as.factor(Daytime.evening.attendance), 
+         Previous.qualification = as.factor(Previous.qualification), 
+         Nacionality = as.factor(Nacionality), 
+         Mother.s.qualification = as.factor(Mother.s.qualification), 
+         Father.s.qualification = as.factor(Father.s.qualification), 
+         Mother.s.occupation = as.factor(Mother.s.occupation), 
+         Father.s.occupation = as.factor(Father.s.occupation), 
+         Displaced = as.factor(Displaced), 
+         Educational.special.needs = as.factor(Educational.special.needs), 
+         Debtor = as.factor(Debtor), 
+         Tuition.fees.up.to.date = as.factor(Tuition.fees.up.to.date), 
+         Gender = as.factor(Gender), 
+         Scholarship.holder = as.factor(Scholarship.holder), 
+         International = as.factor(International), 
+         Previous.qualification..grade. = scale(Previous.qualification..grade.),
+         Admission.grade = scale(Admission.grade), 
+         Age.at.enrollment = scale(Age.at.enrollment), 
+         Curricular.units.1st.sem..credited. = 
+           scale(Curricular.units.1st.sem..credited.), 
+         Curricular.units.1st.sem..enrolled. = 
+           scale(Curricular.units.1st.sem..enrolled.), 
+         Curricular.units.1st.sem..evaluations. = 
+           scale(Curricular.units.1st.sem..evaluations.), 
+         Curricular.units.1st.sem..approved. = 
+           scale(Curricular.units.1st.sem..approved.), 
+         Curricular.units.1st.sem..grade. = 
+           scale(Curricular.units.1st.sem..grade.), 
+         Curricular.units.1st.sem..without.evaluations. = 
+           scale(Curricular.units.1st.sem..without.evaluations.), 
+         Curricular.units.2nd.sem..credited. = 
+           scale(Curricular.units.2nd.sem..credited.), 
+         Curricular.units.2nd.sem..enrolled. = 
+           scale(Curricular.units.2nd.sem..enrolled.), 
+         Curricular.units.2nd.sem..evaluations. = 
+           scale(Curricular.units.2nd.sem..evaluations.), 
+         Curricular.units.2nd.sem..approved. = 
+           scale(Curricular.units.2nd.sem..approved.), 
+         Curricular.units.2nd.sem..grade. = 
+           scale(Curricular.units.2nd.sem..grade.), 
+         Curricular.units.2nd.sem..without.evaluations. = 
+           scale(Curricular.units.2nd.sem..without.evaluations.), 
+         Unemployment.rate = scale(Unemployment.rate), 
+         Inflation.rate = scale(Inflation.rate), GDP = scale(GDP)) 
+```
+
+```{r, message = FALSE, results = "hide"}
+# 3. Split the dataset for computational efficiency
+set.seed(42)
+sample_size_split <- floor(0.3 * nrow(sdac_proc)) 
+train_indices_split <- sample(seq_len(nrow(sdac_proc)), 
+                              size = sample_size_split)
+# Create training and testing datasets
+sdac_split <- sdac_proc[train_indices_split, ]
+```
+
+```{r message=TRUE, results="hide"}
+# 4. Deal with infrequent categories in factors
+## Further analysis has shown that infrequent categories of different factors 
+# cause problems with K-fold, since they cannot be allocated proportionally. 
+# Worst scenario is when they get into test set, but not in the training set. 
+# At first, we tried to apply two steps in order not to lose valuable 
+# information. Step 1: Encoding infrequent levels of factors into other group, 
+# Step 2: Remove the levels below the threshold. However, further modelling 
+# proved that this approach largely leads to model complexity and 
+# misspecification. Therefore, we decided to proceed with only Step 2.
+
+#  We set the threshold to 10
+min_threshold <- 10
+factor_cols <- names(sdac_split)[sapply(sdac_split, is.factor)]
+# Create a copy to modify
+data_del <- sdac_split
+
+# 4.1 Delete all categories below the threshold
+#   Initialize a logical vector to mark rows to keep (all TRUE initially)
+rows_to_keep <- rep(TRUE, nrow(data_del))
+for (col_name in factor_cols) {
+  # Calculate level counts for the current column in the loop
+  level_counts <- data_del %>%
+    count(!!sym(col_name), name = "level_count", .drop = FALSE)
+  # Identify levels that are below the deletion threshold
+  infrequent_levels <- level_counts %>%
+    filter(level_count < min_threshold) %>%
+    pull(!!sym(col_name)) # transforms column into a vector
+  # Show which levels set to be deleted
+  if (length(infrequent_levels) > 0) {
+    
+    # Mark rows for removal if the current column contains one 
+    # of these infrequent levels
+    rows_to_keep[data_del[[col_name]] %in% infrequent_levels] <- FALSE
+  }
+}
+# Create the final dataset by keeping only the marked rows
+data_del <- data_del[rows_to_keep, ]
+# Report how many rows were removed
+message("\n--- Summary of Row Deletion ---")
+message(paste("Rows in original data (sdac_split):", nrow(sdac_split)))
+message(paste("Rows after deleting based on infrequent levels (data_del):", 
+              nrow(data_del)))
+message(paste("Total rows removed:", nrow(sdac_split) - nrow(data_del)))
+## As a result 110 observations were removed from our dataset
+
+```
+
+
+```{r message=TRUE, warning=FALSE}
+# 4.2 Deleting factors with only one level after transformations
+## Depending on the seed, it could be the case, that one of our columns 
+# contains now only one level. Therefore, we need to make sure, 
+# that this predictor would be removed from our model.
+cols_to_remove <- c()
+for (col_name in factor_cols) {
+  # Use droplevels() to remove unused levels from the factor's definition
+  current_factor_data <- droplevels(data_del[[col_name]])
+  num_remaining_levels <- nlevels(current_factor_data)
+  if (num_remaining_levels <= 1) {
+    message(paste0("Factor column '", col_name, 
+                   "' has ", num_remaining_levels, 
+                   " unique level after droplevels. ",
+                   "It will be deleted."))
+    cols_to_remove <- c(cols_to_remove, col_name)
+  }
+}
+
+# Delete the identified columns from the dataframe
+if (length(cols_to_remove) > 0) {
+  data_proc <- data_del %>%
+  select(-all_of(cols_to_remove))
+  # Report deleted cols
+  message(paste("\nDeleted", length(cols_to_remove), "column(s):", 
+                paste(cols_to_remove, collapse = ", ")))
+  message(paste("Remaining columns:", paste(names(data_proc), collapse = ", ")))
+} else {
+  message("\nNo factor columns were identified as having only one unique level. 
+          No columns deleted.")
+  data_proc <- data_del
+}
+## Fortunately, seed 42 has no columns that would be deleted
+
+nrow(data_proc)
+## There are 979 rows in our trimmed dataset
+
+ncol(data_proc)
+## And 36 predictors with 1 outcome variable
+
+# include Factorization & Scaling + infrequent level deletion
+```
+
+b. Report the number of observations, columns (with their meaning) and their data types. 
+Indicate clearly what you will use as dependent variable/label. 
+
+<!-- REPORT IT BELOW -->
+
+In summary, the original dataset was formulated as a classification task with three 
+levels namely; dropout, enrolled, and graduate. To simplify it, we omitted the “enrolled” 
+class, reducing the problem to a binary classification task. The resulting dataset 
+contained a total of 3630 observations while the 30% sample that was used for our 
+task contained 979 observations after preprocessing, with 36 predictors based on 
+academic, socioeconomic, and demographic information, and the dependent variable. 
+These features are in the form of integers, categorical, and real-valued, with the 
+dependent variable ‘target’ being categorical.
+
+## 2. Split the data and tranform columns as necessary. (0.5pt)
+ Split the data into training (80%) and test set (80%). Transform the columns if necessary.
+
+```{r}
+set.seed(42)
+sample_size <- floor(0.80 * nrow(data_proc)) 
+train_indices <- sample(seq_len(nrow(data_proc)), size = sample_size)
+train_data <- data_proc[train_indices, ]
+test_data <- data_proc[-train_indices, ]
+
+```
+
+## 3. Model Exploration (3pt)
+
+a. Fit multiple appropriate models to the dataset (as many models as there are members 
+in the group, with a minimum of two models). Models might vary in the multilevel 
+structure, informativeness of their priors (but not just trivial changes), model 
+of the data/likelihood, etc. (I recommend not to use no pooling models since they 
+tend to take a long time and it's very hard to assign good priors). 
+**Assess if models converged: Report how the traceplots looks like, highest Rhat, 
+number of effective samples, etc. If didn't converge, address the issues. (If you 
+can't solve the problems, report them and continue with the assignment).**
+
+<!-- message = FALSE, results = "hide" prevents displaying output, if you need to show something create another chunk of code -->
+
+```{r, echo=FALSE}
+
+# Insert Table
+df <- data.frame(
+  Model = c(
+    "Model 1: Complete pooling with all features", 
+    "Model 2: Varying intercept with all predictors", 
+    "Model 3: Varying intercept with reduced features and a two way interaction", 
+    "Model 4: Varying intercept and slope with reduced features", 
+    "Model 5: Varying intercept with all predictors"
+  ),
+  `Priors` = c(
+    "Brms Default (Flat) Priors", 
+    "Horseshoe with par_ratio = 0.3", 
+    "Gelman et al. (2008)", 
+    "Gelman et al. (2020)", 
+    "Gelman et al. (2020)"
+  ),
+  Hierarchy = c(
+    "N/A", 
+    "Course", 
+    "Previous qualification", 
+    "Course", 
+    "Course"
+  )
+)
+
+df %>%
+  gt() %>%
+  cols_label(
+    Model = "Model",
+    `Priors` = "Priors",
+    Hierarchy = "Hierarchy"
+  )
+```
+
+*Model 1:*As expected, the run time for model 1 was significantly increased as a 
+result of increasing adapt_delta to 0.999 and maximum tree depth to 15, in order 
+to facilitate convergence of the model parameters. Despite this, none of the chains 
+converged with the highest Rhat value being 3.40. Additionally, extremely low Bulk_ESS 
+and Tail_ESS values were observed, with an average bulk ESS value of 20.94 and an 
+average tail ESS value of 66.46. This non convergence is likely attributable to 
+unaccounted heterogeneity and model misspecification, given that this complete pooling 
+model assumes homogeneous effects between the predictors and the outcome variable 
+across all observations. The performance of this model suggests that there may be 
+important clusters in the dataset and/or noisy predictors in this dataset, which 
+will be experimented with in the subsequent models.
+
+```{r, message = FALSE, results = "hide"}
+## 1. Model 1: Complete Pooling
+model1 <- brm(target_n ~ ., 
+              data = train_data,  
+              family = bernoulli(link=logit),
+              control  = list(adapt_delta = .999, 
+                              max_treedepth = 15),
+              iter = 4000,
+              warmup = 1000,
+              seed = 42,
+              cores = parallel::detectCores(),
+              file = 'model1'
+)
+
+model1
+
+# Create traceplots to visually assess chain mixing
+plot(model1, type = "trace", ask=FALSE)
+
+
+```
+
+*Model 2:*The computation time for model 2 was relatively shorter, however, there 
+were a few divergent transitions indicating convergence issues. As a result, additional 
+controls were applied including increasing adapt_delta to 0.999, maximum tree depth 
+to 15, and number of iterations to 4000. With these additional tweaks, the model 
+managed to converge. The trace plot showed reasonable caterpillar graphs for all 
+chains. Meanwhile, the maximal Rhat value was 1.00, and both Bulk and Tail ESS on 
+average are well above 50% of post-warmup draws.
+
+```{r, message = FALSE, results = "hide"}
+## 2. Multi-level on Courses with Horseshoe
+
+# Based on previous model, many predictors had effects close to 0, we will set par_ratio to 0.3 to 1 ratio
+
+model2 <- brm(target_n ~ . + (1 | Course) - Course, 
+              data = train_data,  
+              family = bernoulli(link=logit),
+              prior = c(prior(horseshoe(par_ratio = 0.3), class = b)), 
+              control  = list(adapt_delta = .999, 
+                              max_treedepth = 15),
+              iter   = 4000,
+              warmup = 1000,
+              seed = 42,
+              cores = parallel::detectCores(),
+              file = 'model2'
+)
+
+# Reflect model's summary to check convergence
+model2
+
+# Reflect trace plots for convergence
+plot(model2, type = "trace", ask=FALSE)
+
+```
+
+*Model 3:*The initial diagnostic check for model 3 revealed two divergent transitions, 
+these were resolved by increasing adapt_delta from the default 0.8 to 0.999, to 
+reduce the step size and increase target acceptance probability. Additionally, all 
+Rhat values were approximately 1.00 indicating that all chains converged. More so, 
+all chains in the trace plots seemed to overlap, with the distinct “fat hairy caterpillar” 
+appearance, signifying good mixing of the chains for the model parameters. For the 
+assessment of the number of effective samples, all Bulk_ESS values and Tail_ESS values 
+were greater than 900 indicating efficient sampling in the main and tail regions 
+of the posterior distribution. 
+
+```{r, message = FALSE, results = "hide"}
+# Model 3: Partial pooling with projpred submodel features
+
+# Obtain standard deviations for the priors
+cusse <- 2.5/sd(train_data$Curricular.units.2nd.sem..enrolled.) 
+intn <- 2.5/sd(train_data$Curricular.units.1st.sem..approved*
+                 train_data$Curricular.units.2nd.sem..approved.)
+
+# sd’s for Course and tuition variable are set to 2.5 because they are 
+# categorical values which have been factored hence they don't have real numbers
+
+# A global beta prior was used to avoid assigning individual beta coefficients 
+# to all levels of the course variable for efficiency
+
+# Set coefficient-specific priors for the interaction term and Curricular 
+# feature to override global beta prior for these variables
+
+# Define priors
+model3_gelmanpriors <-c(prior(normal(0, 2.5), class = Intercept),
+                        prior(normal(0, 2.5), class = b),
+                        prior(normal(0, 2.54), class = b, coef = 
+                                Curricular.units.2nd.sem..approved.),
+                        prior(normal(0, 1.65), class = b, coef = Curricular.units.1st.sem..approved.:Curricular.units.2nd.sem..enrolled.))
+
+  
+# Specify the model
+model3 <- brm(target_n ~ Tuition.fees.up.to.date + Course + 
+                Curricular.units.2nd.sem..approved.+ 
+                (Curricular.units.1st.sem..approved.* 
+                   Curricular.units.2nd.sem..enrolled.)^2 + 
+                (1 | Previous.qualification),
+              data = train_data,
+              family = bernoulli(link=logit),
+              prior = model3_gelmanpriors,
+              seed = 42,
+              # chains :use default 
+              # iter: use default
+               # Increase delta to curb divergent transitions
+              control = list(adapt_delta = 0.999),
+              cores = parallel::detectCores(), # Enable parallel processing
+              save_pars = save_pars(all = TRUE),
+              file= "model3")
+
+# Display fitted model’s summary
+summary(model3)
+
+# Visualize the mixing of the chains using traceplots
+plot(model3)
+
+```
+
+*Model 4:*By inspecting the convergence diagnostics and trace plots, Model 4 showed 
+successful convergence. All Rhat values are 1.00, indicating good convergence across 
+chains. The Bulk_ESS and Tail_ESS values are sufficiently high, suggesting reliable 
+effective sample sizes. The lowest Bulk_ESS is 739 for the group-level standard deviation 
+of the intercept, which is still within an acceptable range. Additionally, the trace 
+plots for all parameters showed no signs of non-convergence. There were no stuck 
+chains or poor mixing, supporting a good convergence. 
+
+```{r, message = FALSE, results = "hide"}
+# Model 4:
+
+# Set the Gelman et al 2020 priors with default values
+gelman_priors_h <- c(
+    prior(normal(0, 2.5), class=Intercept), 
+    prior(normal(0, 2.5), class=b),
+    prior(exponential(0.4), class = sd), 
+    prior(lkj(2), class = cor)
+  )
+
+# Instantiate the model
+model4 <- brm(
+  target_n ~ Curricular.units.2nd.sem..approved. + 
+    Curricular.units.2nd.sem..enrolled. + 
+    Tuition.fees.up.to.date + 
+    Curricular.units.1st.sem..approved. + 
+    Curricular.units.1st.sem..credited. + 
+    Scholarship.holder + 
+    Debtor + (1 + Debtor | Course),
+  family = bernoulli(link=logit), 
+  data = train_data, 
+  prior = gelman_priors_h,
+  seed = 42,
+  cores = parallel::detectCores(),
+  control = list(adapt_delta = 0.95),
+  file = 'model4',
+  file_refit = 'on_change', 
+  )
+
+# Check the posterior summary
+model4
+
+# Check the traceplots
+plot(model4)
+
+```
+
+*Model 5:*The model converged well, with one single Rhat being 1.01. All other Rhat 
+values are exactly 1. All trace plots look like caterpillars, which indicates that 
+the chains mixed well. Both the average Bulk and Tail effective sample sizes are 
+large, for example the average Bulk ESS is higher than 4000, indicating effective 
+sampling. No Bulk or Tail ESS values are lower than 1000.
+
+```{r, message = FALSE, results = "hide"}
+# Model 5:
+
+# Define priors
+GelmanEtAl <- c(prior(normal(0, 2.5), class = Intercept),
+                prior(normal(0, 2.5), class = b),
+                prior(exponential(0.0028), class = sd))
+
+# Build the model
+model5 <- brm(target_n ~ . + (1 | Course) - Course, 
+              data = train_data,
+              family = bernoulli(link = logit),
+              prior = GelmanEtAl,
+              seed = 42,
+              cores = parallel::detectCores(),
+              file = 'model5'
+)
+
+# Check the posterior summary
+model5
+
+# Check the traceplots
+plot(model5, type = "trace", ask=FALSE)
+
+```
+
+b. Explain each model and describe its structure (what they assume about potential 
+population-level or group-level effects), and the type of priors used. 
+
+<!-- EXPLAIN BELOW, REFER TO EACH MODEL -->
+
+*Model 1:* A complete pooling model with all predictors. The model specifies a Bernoulli 
+distribution with a logit link function, which is appropriate for binary classification 
+problems and transforms the linear combination of predictors into probabilities via 
+the logistic function. It used brms’ default prior flat priors, with the assumption  
+of homogenous effect across the dataset. This model is an important basis for the 
+following models as it first explores the homogeneity in the relationship between 
+the predictors and outcome variables across observations. 
+
+*Model 2:* A multilevel model which modifies the previous model by applying horseshoe 
+priors in order to reduce noise from using the full set of predictors. The course 
+predictor, which indicates the student’s study programs, is used as a random intercept 
+to account for the population level heterogeneity in this model. The model assumes 
+population clustering based on the course taken by each student. This clustering 
+assumes only intercept-level effects implying that no slopes are affected by the 
+clusters. The horseshoe priors mitigate the effect of noisy predictors thus indirectly 
+performing variable selection. The par ratio is set to 0.3, after observing a large 
+number of predictors with close to 0 effect in the previous model. This reduces the 
+impact of noisy predictors while still keeping it conservative enough in order to 
+avoid degrading the importance of too many predictors.
+
+*Model 3:* A varying intercept model that includes a two way interaction between two 
+variables  namely; Curricular.units.1st.sem..approved and Curricular.units.2nd.sem..enrolled. 
+The interaction terms were chosen due to their relatively large individual coefficients, 
+based on Gelman et al., (2021, p.135) suggested criterion for selecting interaction terms. 
+This model differs from the previous two models in terms of informativeness and multilevel 
+structure, as it applies weakly informative Gelman priors and allows the intercept to 
+vary according to Previous.qualification as a random intercept. It specifies normal(0, 2.5) 
+priors for the intercept and most beta coefficients, in order to reflect conservative 
+assumptions about effect sizes. Whereas the beta coefficients for the interaction term 
+adjusts the prior standard deviations relative to the variability of the predictors 
+in the training set. The model assumes that the population level effects of the selected 
+predictors are constant across all Previous.qualification group levels and that the 
+random intercepts only affect the baseline probability for each group. 
+
+*Model 4:* A multilevel model with both varying intercepts and varying slopes for 
+the grouping factor Course. It assumes that students enrolled in different courses 
+may have higher or lower than the average probability of dropout, which is captured 
+by the random intercept for Course. In addition, the size of the debt effect may 
+also differ from course to course, modelled through a random slope for Debtor. The 
+fixed-effect predictors are assumed to have common effects across all courses. The 
+initial assumption also includes a correlation term between the Course-level intercept 
+and the slope for Debtor, however this was not supported by the model summary. The 
+initial model used the Gelman weakly informative priors, including an exponential prior 
+for the standard deviations of group-level effects and a mildly regularised LKJ prior 
+for the correlation. The final model specification removes the correlation term due 
+to high uncertainty and adopts more weakly informative priors to reduce conflicts 
+between the priors and the likelihood.  
+
+*Model 5:* A varying intercept multilevel model, with Courses as groups and weakly 
+informative priors from Gelman et al. (2020). This model includes a parameter which 
+is the adjustment to the intercept for a certain course, compared to the global intercept 
+which denotes the average drop-out probability across the entire student population. 
+In other words, we are assuming that the average student dropout probability varies 
+by course. The prior for the variability of these varying intercepts is formulated 
+as exponential(0.0028). For the intercept and coefficients, we defined Gelman et al. 
+(2020) priors with a mean of 0 and a standard deviation of 2.5. Given that the predictors 
+were scaled, the prior was set to normal(0, 2.5) for each coefficient. The idea behind 
+Gelman priors is that they are not too informative, so they won’t influence our model 
+too much. Next to the group-level effect of courses, we include the full set of predictors 
+excluding courses as fixed effects, with variables such as Age at enrollment, Nationality, 
+GDP, Admission grade, and the mother’s and father’s qualification. We expect that 
+the effect of all these predictors are similar across courses.
+ 
+
+## 4. Model checking (3pt)
+
+a. Perform a prior sensitivity analysis for each model and modify the model if appropriate. Justify.
+
+<!-- EXPLAIN CONCLUSIONS AND WHETHER MODELS ARE KEPT, MODIFIED  -->
+
+In order to assess the extent to which our results were influenced by the chosen 
+priors, Automatic Prior sensitivity analysis was performed for all models using 
+powerscale_sensitivity, by Kallioinen et. al.(2024),  due to the complexity of the 
+models. The subsequent section contains a description of our observations per model.
+
+*Model 1:* Since this is a complete pooling model, there are no hierarchical group-specific 
+estimates that might amplify prior influence. The model is not well-behaved, and 
+the effective sample size is too low for reliable diagnostics.
+
+```{r}
+# Model 1
+priorsense::powerscale_sensitivity(model1)
+```
+
+*Model 2:* The sensitivity analysis identified multiple potential prior conflicts. 
+However, all of them are related to the beta coefficients, especially in terms of 
+standard deviation. In addition, we see some discrepancy between hs_global & hs_slab 
+prior vs likelihood. While small hs_global prior controls overall shrinkage towards 0, 
+hs_slab, on the contrary, allows for a larger influence of the important parameters 
+in order for them not to shrink. Considering that the horseshoe prior was applied to 
+smooth the effect of so many predictors, it pinpoints that priors have a high influence 
+on our posterior, as expected in the case of the horseshoe prior. No additional changes were made.
+
+```{r}
+# Model 2
+priorsense::powerscale_sensitivity(model2)
+```
+
+*Model 3:* The sensitivity analysis for model 3 revealed multiple prior data conflicts 
+and several strong priors/weak likelihood diagnoses relating to the intercept and 
+beta coefficients of the course variable levels, despite Gelman priors being only 
+weakly informative. This either suggests a misalignment between the priors and the 
+likelihood or that the parameters may otherwise be more driven by the priors rather 
+than the data. Typically, such conflicts warrant attention, as they could indicate 
+poorly chosen priors which could introduce bias. However, no adjustments were made 
+to this model as it demonstrated good convergence and efficient sampling in both the 
+tail and main regions of the posterior distribution. This suggests that the model 
+is capable of producing reasonable estimates, which is relevant for the subsequent 
+predictive analysis.
+
+```{r}
+# Model 3
+priorsense::powerscale_sensitivity(model3)
+
+```
+
+*Model 4:* The initial prior sensitivity diagnostics indicated several potential 
+prior-data conflicts across multiple components of the parameters, including the 
+intercept, several fixed-effects predictors, standard deviations of group-level 
+effects and the correlation term. This suggests that the priors may dominate the 
+likelihood in some cases. The conflict with the default weakly informative priors 
+might be due to a weak likelihood. The data provide limited information to estimate 
+the effects precisely. By loosening the priors of the intercept and the coefficients, 
+the conflicts became less evident. Furthermore, by inspecting the posterior summary, 
+the correlation between the size of the debt effect and the course-level dropout 
+probabilities is highly uncertain. This suggests that the data do not provide strong 
+evidence for either a positive or a negative correlation. As a result, the correlation 
+terms were removed for model simplicity. The removal also helped resolve the prior-data 
+conflicts. The modified model shows no further prior-data conflicts. 
+
+```{r}
+# Model 4
+priorsense::powerscale_sensitivity(model4)
+```
+
+```{r}
+## Modified version of model 4 after prior sensitivity analysis
+gelman_priors_h2 <- c(
+    prior(normal(0, 3.8), class=Intercept), 
+    prior(normal(0, 3.8), class=b),
+    prior(exponential(0.0028), class = sd)
+  )
+
+model4_v2 <- brm(
+  target_n ~ Curricular.units.2nd.sem..approved. + 
+    Curricular.units.2nd.sem..enrolled. + 
+    Tuition.fees.up.to.date + 
+    Curricular.units.1st.sem..approved. + 
+    Curricular.units.1st.sem..credited. + 
+    Scholarship.holder + 
+    Debtor + (1 + Debtor || Course),
+  family = bernoulli(link=logit), 
+  data = train_data, 
+  prior = gelman_priors_h2, 
+  control = list(adapt_delta = 0.95),
+  seed = 42,
+  cores = parallel::detectCores(),
+  file = 'model4_v2',
+  file_refit = 'on_change'
+  )
+
+## Check the posterior summary
+model4_v2
+
+## Re-Check the sensitivity
+priorsense::powerscale_sensitivity(model4_v2)
+```
+
+
+*Model 5:* For almost all parameters, the prior sensitivity analysis indicates either 
+a potential prior-data conflict or a potential strong prior / weak likelihood warning. 
+This conflict shows that the Gelman et al. (2020) priors are probably too strong, 
+which causes the estimates to be biased. As a result, the priors were updated to 
+reduce their influence on the model. Considering that, wider priors are recommended 
+over thinner priors in this case, given that we lack information about the real-world 
+effects on school drop-out. The result was a substantial reduction in prior conflicts, 
+with a few persisting conflicts in the beta coefficients associated with predictors 
+like ‘Application mode’ and ‘Previous qualification’. This may be caused by a low 
+amount of observations in some of the categories, which means that the model struggles 
+to estimate their effect. Also, Model 3 and Model 4 both handled their prior conflicts 
+in a different way, which means that models 3 to 5 now have different prior sets, 
+which may contribute to the outcome which would be discussed in section 5, during 
+model comparison.
+
+The new priors and the new model 5.2 are formulated as follows:
+
+```{r}
+# Model 5
+priorsense::powerscale_sensitivity(model5)
+```
+
+```{r}
+## Redefine priors
+GelmanEtAl2 <- c(prior(normal(0, 20), class = Intercept),
+                prior(normal(0, 20), class = b),
+                prior(exponential(0.0028), class = sd)
+)
+
+## Re-Build the model
+model5_v2 <- brm(
+  formula = target_n ~ . + (1 | Course) - Course,
+  data = train_data,
+  family = bernoulli(link = logit),
+  prior = GelmanEtAl2,
+  seed = 42,
+  cores = parallel::detectCores(),
+  file = 'model5_v2'
+)
+
+## Re-Check the posterior summary
+model5_v2
+
+## Re-Check the sensitivity
+priorsense::powerscale_sensitivity(model5_v2)
+
+```
+
+
+b. Conduct posterior predictive checks for each model to assess how well they fit the data.
+Explain what you conclude.
+
+<!-- EXPLAIN CONCLUSIONS -->
+
+*Model 1:* Despite the non convergence of the model, the density overlay plot still 
+shows that the model was able to properly replicate the data. However, these results 
+are unreliable due to non-convergence of the model. 
+
+
+```{r}
+# Model 1
+pp_check(model1, ndraws = 200) 
+pp_check(model1, type='stat_2d', ndraws=200)
+```
+
+*Model 2:* The group chart based on the different courses shows the true distribution 
+of outcomes and the predicted one. The model is very precise at predicting the outcome 
+for each of the Courses. Based on the second chart, we can see the U-shaped distribution 
+capturing the probabilities of two outcomes. The observed distribution lies within 
+the range predicted by the model. The variability at its ends captures predictive 
+uncertainty, which seems fairly consistent and captures the observed data well. The 
+third chart maps the relationship between mean and SD, both observed and predicted 
+by the model. Our observed relationship falls within the pattern predicted by our 
+posterior distribution, indicating that the model successfully reproduces both mean 
+and SD, and their relationship. Overall, posterior predictive checks described above 
+show that this model fits the observed data well.
+
+```{r}
+# Model 2
+pp_check(model2, type='bars_grouped', group='Course')
+pp_check(model2, ndraws = 200) 
+pp_check(model2, type='stat_2d', ndraws=200)
+```
+
+*Model 3:* The density overlay plot for model 3 seems to successfully replicate the 
+distributional shape and uncertainty of the observed data, with the 95% posterior 
+predictive intervals aligning closely with the observed data. Additionally, the 
+frequency bar chart shows that the model correctly predicts the proportion of the 
+sample corresponding to each group of the outcome variable on a population level. 
+More specifically, the grouped bar charts show that the model seems to properly 
+reproduce the observed proportions in larger Previous.qualification groups especially 
+group 1, with closely aligned observed (y) and replicated (yrep) distributions. 
+However, it is unclear if there is an over-or under-estimation in the smaller groups 
+like groups 12 and 42,  given that the observed bars are near-zero, suggesting that 
+the model may be making predictions with minimal data reflecting high uncertainty 
+as a result of fewer observations in those categories.
+
+```{r}
+# Model 3
+# Display default dense overlay
+pp_check(model3, ndraws = 200)
+# Compare frequency 
+pp_check(model3, type = "bars", ndraws = 200)
+# Visualize distributions given categorical groupings
+pp_check(model3, type = 'bars_grouped', group = 'Previous.qualification'
+         , ndraws = 200)
+```
+
+*Model 4:* Overall, the model fits the data well at the global and group levels. 
+While there are some mismatches in some course groups, the model generally captures 
+the structure of the data. No major signs of model misfit are detected. At the global 
+level, the observed data falls within the 95% predictive intervals of replicated data. 
+In addition, the observed mean and standard deviation lie within the simulated distribution. 
+At the group level, the grouped bars show that the model captures course-level variation 
+in dropout probabilities. For a few courses, such as Course9500, the predictions 
+slightly overestimate the actual dropouts. When checking the dropout frequencies 
+grouped by Debtor, the predicted and actual frequencies are in close agreement. 
+Even though there is more uncertainty in predicting dropouts for students who do 
+not have debts. 
+
+```{r}
+# Model 4: 
+## Posterior predictive checks for model 4
+pp_check(model4_v2, ndraws=200)
+pp_check(model4_v2, type ='stat_2d', ndraws=200)
+pp_check(model4_v2, type = 'bars_grouped', group = 'Course', ndraws = 200)
+pp_check(model4_v2, type = 'bars_grouped', group = 'Debtor', ndraws = 200)
+
+```
+
+*Model 5:* The posterior predictive check shows that the model replicates the data 
+quite well. There is a clear U-shape, and the simulated draws (yrep) are very close 
+to the observed data (y). This means that the model fits the training data well, 
+but it doesn’t conclude much about its predictive performance. Considering that 
+the pp_check is based on the data where the model was trained on, a good fit can 
+be expected as long as the model and the priors are not completely off.
+
+```{r}
+# Model 5: 
+pp_check(model5_v2, ndraws = 200)
+pp_check(model5_v2, type='stat_2d', ndraws=200)
+
+```
+
+## 5. Model Comparison (1.5pt)
+
+a. Use k-fold cross-validation to compare the models.
+
+All models were evaluated with stratified 10 fold cross validation, to ensure robustness 
+and generalizability. Stratified splits were generated using the kfold_split_stratified() 
+function from the loo R package (Vehtari et. al., 2024). The binary target variable 
+with length 783 in the training set, was set as the discrete variable, x, for stratifying 
+the cross validation folds, while the number of folds, K, was consistently set to 
+10 across all models to maintain comparability as shown below.
+
+```{r}
+# Model 1:
+set.seed(42)
+x_strat <- train_data$target_n
+length(x_strat)
+
+k <- loo::kfold_split_stratified(K = 10, x = x_strat)
+model1_kfold <- kfold(model1, folds = k, chains = 1)
+
+# We use saved results in order to not rerun KFold at each load
+model1_kfold <- readRDS('model1_kfold.rds') 
+model1_kfold
+```
+
+```{r}
+# Model 2:
+set.seed(42)
+# model2_kfold <- kfold(model2, folds = k, chains = 1)
+model2_kfold <- readRDS('model2_kfold.rds') 
+model2_kfold
+```
+
+```{r}
+# Model 3:
+set.seed(42)
+# model3_kfold <- kfold(model3, folds = k, chains = 1)
+model3_kfold <- readRDS('model3_kfold.rds') 
+model3_kfold
+```
+
+```{r}
+# Model 4_v2:
+set.seed(42)
+# model4_v2_kfold <- kfold(model4_v2, folds = k, chains = 1)
+model4_v2_kfold <- readRDS('model4_v2_kfold.rds') 
+model4_v2_kfold
+
+```
+
+```{r}
+# Model 5:
+set.seed(42)
+# model5_v2_kfold <- kfold(model5_v2, folds = k, chains = 1)
+model5_v2_kfold <- readRDS('model5_v2_Kfold.rds') 
+model5_v2_kfold
+
+
+```
+b. Determine the best model based on predictive accuracy and justify your decision.
+```{r}
+loo_comp <- loo_compare(model1_kfold, model2_kfold, 
+                        model3_kfold, model4_v2_kfold, model5_v2_kfold)
+loo_comp
+```
+
+<!-- DECISION -->
+
+In our comparison of the five main models with major variations in informativeness 
+and hierarchy, model4_v2 outperformed the other models based on the difference in 
+expected log-predictive accuracy (ELPD). More specifically, the LOO log score of 
+all the other models seemed to decrease in reference to model4_v2, which is a varying 
+intercept and varying slope model with reduced features and gelman priors, by greater 
+than 9.3 units. Meanwhile, model1, the complete pooling model with default priors 
+had the least ELPD and most decrease in the LOO log score. More generally, all hierarchical 
+models outperformed the complete pooling model, likely as a result of accounting 
+for the heterogeneity due to group-level variations. Additionally, the models which 
+used all the predictors seemed to perform poorly compared to the models with reduced 
+features, which seems to demonstrate the negative influence of noisy predictors. 
+The only exception was model 2 which used the full set of features but applied horseshoe 
+priors. This seems to demonstrate the capacity of regularised horseshoe priors as 
+an internal variable selection mechanism in high dimensional settings and the mitigating 
+effects of shrinkage priors. 
+
+## 6. Interpretation of Important Parameters (1.5pt)
+
+Choose one of the best models and interpret its most important parameters.
+
+<!-- INTERPRETATION AND CODE GOES HERE -->
+
+Given the multilevel structure with varying intercepts and slopes, there are three 
+components to examine in the model parameters: population-level effects, group-level 
+effects in the intercepts and group-level effects in the slopes. These components 
+correspond to different aspects of modeling questions: 
+
+- What is the average dropout probability, and how do the predictors in academic 
+activities and financial situations affect this overall probability? 
+
+- How does dropout behaviour vary across students in different courses? 
+
+- This model is particularly interested in the effect of having debts. If having 
+debts is associated with the overall dropout, is this effect valid and consistent 
+across all groups? 
+
+At the population level, without accounting for course-specific variation, for a 
+student with average academic performance in an average course, tuition fees not 
+up to date, no scholarship and no debts, the estimated log-odds of dropout is 3.61 
+with a 95% credible interval from 2.06 to 5.33. This corresponds to an estimated 
+dropout probability of 96.49%, with 95% certainty that the probability lies between 
+88.7% and 99.52%. As an important sidenote: the students who did not pay their tuition 
+fees on time and lacked scholarship support are marked as the reference group, which 
+explains these high drop-out probabilities. Moreover, all predictors in the model 
+have a meaningful effect on dropout probability, as their 95% credible intervals 
+do not include 0. However, the direction of their effects differs. According to 
+the model, we should be 100% sure that an increase in 'Curricular.units.2nd.sem..enrolled.' 
+increases the chances of dropout, while an increase in 'Curricular.units.2nd.sem..approved.' 
+decreases the chances. 
+
+At the group level, the estimated standard deviation of the course-specific intercepts 
+is 1.1 with a 95% credible interval of 0.49 to 1.93, indicating a clear variation 
+in dropout risk across different courses. The random intercepts reflect this heterogeneity: 
+for instance, Course9853 ('Basic Education') has a positive adjustment to the baseline 
+dropout probability, while students in Course171 ('Animation and Multimedia Design') 
+have a lower-than-average dropout probability. Their differences are meaningful, 
+as their credible intervals do not cross 0. 
+
+For the effect of debt status, we are 99.38% sure that being in debt will increase 
+the chances of dropout. Specifically, for the size of the effect, the odds of dropout 
+for a student with debt are estimated to be 10.76 times higher than for a student 
+without debt. This translates to an average increase of 2.89% in dropout probability. 
+At the same time, the effect of debt is not uniform. The estimated standard deviation 
+of the effect of debts across courses is 1.55, suggesting that the effect of debts 
+on dropout also varies across courses. However, the 95% credible interval ranges 
+from 0.08 to 4.16, which indicates high uncertainty in this estimate. 
+
+```{r}
+# Check the posterior summary
+posterior_summary(model4_v2)
+```
+
+
+```{r}
+# Fixed effects
+fixed_effects <- as.data.frame(fixef(model4_v2))
+fixed_effects
+
+# Plot fixed effects  
+fixed_effects$Parameter <- rownames(fixed_effects)
+ggplot(fixed_effects, 
+       aes(y = reorder(Parameter, Estimate),
+           x = Estimate, 
+           xmin = Q2.5, xmax = Q97.5)) +
+  geom_point() +
+  geom_errorbarh() +
+  labs(
+    title = 'Fixed Effects with 95% Credible Intervals',
+    x = 'Fixed Effects (log-odds)',
+    y = 'Parameter'
+  )
+```
+
+```{r}
+# posterior distribution of two fixed effect examples
+plot(model4_v2, variable = 'b_Curricular.units.2nd.sem..enrolled.')
+plot(model4_v2, variable = 'b_Curricular.units.1st.sem..approved.')
+
+# direction of effects
+mean(as.data.frame(model4_v2)$b_Curricular.units.2nd.sem..enrolled. > 0)
+mean(as.data.frame(model4_v2)$b_Curricular.units.1st.sem..approved. < 0)
+```
+
+```{r}
+# apply logistic function to get probabilities from log-odds
+alpha_samples <- as_draws_df(model4_v2)$b_Intercept
+av_dropout <- inv_logit_scaled(alpha_samples)
+c(mean = mean(av_dropout), quantile(av_dropout, c(0.025, 0.975)))
+```
+
+```{r}
+# odds of dropout change when having debts
+beta_samples <- as_draws_df(model4_v2)$b_Debtor1
+odds_samples <- exp(beta_samples)
+c(mean = mean(odds_samples),
+  quantiles = quantile(odds_samples, probs = c(0.025,.975)))
+```
+
+```{r}
+# the increase in dropout probability when in debt
+debt_dropout <- inv_logit_scaled(beta_samples + alpha_samples)
+debt_prob <- debt_dropout - av_dropout
+c(mean = mean(debt_prob), quantile(debt_prob, c(0.025, 0.975)))
+
+# plot the estimated dropout probability by debt status, averaged over course-level variation
+conditional_effects(model4_v2, effects = "Debtor", re_formula = NA)
+```
+
+```{r}
+# group-level effects in the intercepts
+random_intercepts <- ranef(model4_v2)$Course[ , , 'Intercept']
+random_intercepts
+
+# plot the effects
+random_intercepts <- as.data.frame(random_intercepts)
+random_intercepts$Course <- rownames(random_intercepts)
+ggplot(random_intercepts, 
+       aes(y = reorder(Course, Estimate), 
+           x = Estimate, 
+           xmin = Q2.5, xmax = Q97.5)) + 
+  geom_point(color = 'steelblue') + 
+  geom_errorbar(color = 'steelblue') +
+  labs(
+    title = 'Random Intercepts by Course with 95% Credible Intervals',
+    x = 'Intercept Adjustment (log-odds)',
+    y = 'Course'
+  )
+```
+
+```{r}
+# group-level effects in the slopes
+random_slopes <- ranef(model4_v2)$Course[ , , 'Debtor1']
+random_slopes
+
+# plot the effects
+random_slopes <- as.data.frame(random_slopes)
+random_slopes$Course <- rownames(random_slopes)
+ggplot(random_slopes, 
+       aes(y = reorder(Course, Estimate), 
+           x = Estimate, xmin = Q2.5, xmax = Q97.5)) + 
+  geom_point(color = 'darkred') + 
+  geom_errorbar(color = 'darkred') + 
+  labs(
+    title = 'Random Slopes for Debtor Effect by Course with 95% Credible Intervals',
+    x = 'Slope Adjustment for Debtor Effect (log-odds)',
+    y = 'Course'
+  )
+```
+
+```{r}
+# posterior probability of the Debtor effect
+plot(model4_v2, variable = 'b_Debtor1')
+mean(as_draws_df(model4_v2)$b_Debtor1  > 0)
+```
+
+
+## 7. Report a loss function on the test set (Optional for bonus 0.5 to 1pt, depending on if you use RMSE or another function).
+
+Report RMSE or other loss (or utility) function on the test set. (Transform it back if necessary).
+
+The loss function that was applied to our task was the Brier Score. Given that our 
+task has a binary outcome and our goal was to maximise the reliability of probabilistic 
+predictions, given demographic, socioeconomic and curricular predictors. It is calculated 
+as the mean squared difference between the predicted probability and the actual 
+outcome (Brier, 1950). It typically takes values between 0 and 1 with values closer 
+to 0 indicating more reliable estimates. The Brier Score of our best model on the 
+test set was 0.079. This means that, on average, the model’s predicted probabilities 
+differ from the actual outcomes by 0.079 units squared, indicating strong predictive 
+performance and reliable probability estimates. Additionally, a custom expected 
+utility function was applied to this task which has similarities with probabilistic 
+accuracy, as it subtracts the square root of the Brier Score from 1 and scales the 
+result by 100. This transformation serves to assess the tradeoff between reliability 
+and unreliability of our estimates, consequently optimising reliability in terms 
+of utility. It can equally be interpreted more intuitively, with higher values indicating 
+increased reliability of our probability estimates about whether a student dropouts 
+or not. Our best model obtained a score of 71.96 suggesting a high level of reliability 
+in its predicted probabilities compared to the other models.
+
+```{r}
+
+# Get predicted probabilities
+pred_probs <- fitted(model4_v2, newdata = test_data, summary = TRUE, 
+                     allow_new_levels = TRUE)[, "Estimate"] 
+# Get actual outcomes from test data
+actual_outcomes <- test_data$target_n
+brier_score <- mean((pred_probs - actual_outcomes)^2) 
+print(paste("Brier Score:", brier_score))
+```
+
+```{r}
+
+# Custom utility function
+dropout_utility <- function(y, y_pred) {
+  brier_score <- mean((y - y_pred)^2)
+  utility <- (1 - sqrt(brier_score)) * 100
+  return(utility)
+}
+
+# Get predicted probabilities
+pred_probs4_v2 <- fitted(model4_v2, newdata = test_data, 
+                         summary = TRUE, allow_new_levels = TRUE)[, "Estimate"]
+pred_probs4 <- fitted(model4, newdata = test_data, summary = TRUE, 
+                      allow_new_levels = TRUE)[, "Estimate"]
+
+# Apply the function to the all models using test data
+dropout_utility(y=test_data$target_n, y_pred=pred_probs4)
+dropout_utility(y=test_data$target_n, y_pred=pred_probs4_v2)
+```
+
+
+# References
+
+<!-- Complete if necessary -->
+
+- Bayes@Lund (2023, February 7). Frank Weber - Projection predictive variable selection with 
+projpred [Video]. https://www.youtube.com/watch?v=P7bnEPkkTYw
+- Brier, G. W. (1950). Verification of forecasts expressed in terms of probability. Monthly weather 
+review, 78(1), 1-3.
+- Catalina, A., Bürkner, P. C., & Vehtari, A. (2022, May). Projection predictive inference for 
+generalized linear and additive multilevel models. In International conference on artificial intelligence and statistics (pp. 4446-4461). PMLR.
+- Gelman, A., Hill, J. & Vehtari, A. (2020). Regression and Other Stories. Cambridge University 
+Press.
+- Gelman, A., Hill, J., & Vehtari, A. (2021). Regression and other stories. Cambridge University 
+Press. 
+- Gelman, A., Jakulin, A., Pittau, M. G., & Su, Y. S. (2008). A weakly informative default prior 
+distribution for logistic and other regression models.
+- Kallioinen, N., Paananen, T., Bürkner, P. C., & Vehtari, A. (2024). Detecting and diagnosing 
+prior and likelihood sensitivity with power-scaling. Statistics and Computing, 34(1), 57.
+- Pereira, N. R., & Mendes-Moreira, J. (2022). Predict students dropout and academic success 
+[Data set]. UCI Machine Learning Repository. 
+https://archive.ics.uci.edu/dataset/697/predict+students+dropout+and+academic+success
+- Piironen, J., Paasiniemi, M., Catalina, A., Weber, F., & Vehtari, A. (2023). projpred: Projection 
+predictive feature selection. R package version 2.8.0. https://cran.r-project.org/web/packages/projpred/vignettes/projpred.html
+- Piironen, J., Paasiniemi, M., Catalina, A., Weber, F., & Vehtari, A. (2023). projpred: Projection 
+predictive feature selection (Version 2.8.0) [R package]. https://mc-stan.org/projpred/. 
+- Piironen, J., & Vehtari, A. (2017). Comparison of Bayesian predictive methods for model 
+selection. Statistics and Computing, 27, 711-735.
+- R Consortium (2023, August 3). An Introduction to Projection Predictive Variable Selection 
+[Video]. https://www.youtube.com/watch?v=cKUa-3cVO-s
+- Vehtari, A., Gabry, J., Yao, Y., & Gelman, A. (2020). loo: Efficient Leave-One-Out 
+Cross-Validation and WAIC for Bayesian Models (R package version 2.4.1). Retrieved from https://mc-stan.org/loo/
+- Vehtari, A., Gabry, J., Magnusson, M., Yao, Y., Bürkner, P.-C., Paananen, T., & Gelman, A. 
+(2024). loo: Efficient leave-one-out cross-validation and WAIC for Bayesian models (R 
+package version 2.8.0). https://mc-stan.org/loo/
+
+# Appendix
+
+**Appendix A:Link to Dataset and Variable Table**
+No variable table was created for this task as the link below equally contains a 
+variable table made by the original author of the dataset 
+https://archive.ics.uci.edu/dataset/697/predict+students+dropout+and+academic+success
+
+
+**Appendix B: Initial Preprocessing**
+This was excluded because it was incompatible with k fold cross validation leading 
+to new factor levels errors which was resolved by eradicating classes with minimal observations
+
+```{r message=FALSE, warning=FALSE}
+
+# Read the dataset
+sdac <- read.csv('SDAC.csv')
+
+
+set.seed(42)
+
+# Apply preprocessing
+sdac_proc <- sdac %>%
+  filter(target != "Enrolled") %>% # returns 3630 obs
+  # Convert target to 0 and 1/Encode target variable
+  mutate(target_n = ifelse(target == "Graduate", 0, 1)) %>% 
+  select(-target) %>% # Deselect the previous target
+    # Select quarter of the original data for computational efficiency
+  slice_sample(prop = 0.25) %>% 
+  mutate(Marital.Status = as.factor(Marital.Status), 
+         Application.mode = as.factor(Application.mode), 
+         Application.order = as.factor(Application.order), 
+         Course = as.factor(Course), Daytime.evening.attendance = 
+           as.factor(Daytime.evening.attendance), 
+         Previous.qualification = as.factor(Previous.qualification), 
+         Nacionality = as.factor(Nacionality), Mother.s.qualification = 
+           as.factor(Mother.s.qualification), Father.s.qualification = 
+           as.factor(Father.s.qualification), Mother.s.occupation = 
+           as.factor(Mother.s.occupation), Father.s.occupation = 
+           as.factor(Father.s.occupation), Displaced = as.factor(Displaced), 
+         Educational.special.needs = as.factor(Educational.special.needs), 
+         Debtor = as.factor(Debtor), Tuition.fees.up.to.date = 
+           as.factor(Tuition.fees.up.to.date), Gender = as.factor(Gender), 
+         Scholarship.holder = as.factor(Scholarship.holder), International = 
+           as.factor(International), Previous.qualification..grade. = 
+           scale(Previous.qualification..grade.), Admission.grade = 
+           scale(Admission.grade), Age.at.enrollment = scale(Age.at.enrollment), Curricular.units.1st.sem..credited. = scale(Curricular.units.1st.sem..credited.), Curricular.units.1st.sem..enrolled. = scale(Curricular.units.1st.sem..enrolled.), Curricular.units.1st.sem..evaluations. = 
+           scale(Curricular.units.1st.sem..evaluations.), 
+         Curricular.units.1st.sem..approved. = 
+           scale(Curricular.units.1st.sem..approved.), 
+         Curricular.units.1st.sem..grade. = scale(Curricular.units.1st.sem..grade.), Curricular.units.1st.sem..without.evaluations. = 
+           scale(Curricular.units.1st.sem..without.evaluations.), 
+         Curricular.units.2nd.sem..credited. = 
+           scale(Curricular.units.2nd.sem..credited.), 
+         Curricular.units.2nd.sem..enrolled. = 
+           scale(Curricular.units.2nd.sem..enrolled.), 
+         Curricular.units.2nd.sem..evaluations. = 
+           scale(Curricular.units.2nd.sem..evaluations.), 
+         Curricular.units.2nd.sem..approved. = 
+           scale(Curricular.units.2nd.sem..approved.), 
+         Curricular.units.2nd.sem..grade. = 
+           scale(Curricular.units.2nd.sem..grade.), 
+         Curricular.units.2nd.sem..without.evaluations. = 
+           scale(Curricular.units.2nd.sem..without.evaluations.), 
+         Unemployment.rate = scale(Unemployment.rate), Inflation.rate = 
+           scale(Inflation.rate), GDP = scale(GDP)) # Convert categorical 
+  # predictors into factors and scale continuous 
+  # (we could automate based on data types, we don't want mistakes, however)
+```
+
+**Appendix C: Projpred**
+Variable selection was performed using Posterior Predictive Variable Selection with 
+projpred (Piironen et. al., 2023).  This involved specifying a reference model with 
+regularised horseshoe priors for the beta coefficients and a normal priors for the 
+intercept, subsequently a forward search was performed, iteratively selecting variables 
+which decrease the Kullback-Leibler (KL) divergence from the reference model’s predictive 
+distribution to the projection model (Catalina et. al., 2022; Piironen et. al., 2023). 
+The model was equally evaluated using a leave out one cross validation method to prevent 
+overfitting although overfitting is typically not a big concern for Bayesian models 
+given that greater model complexity helps account for more uncertainty. 
+
+Another dimension of variable selection using projpred which would have been interesting 
+to explore given the hierarchical nature of our dataset is identifying relevant clusters 
+by specifying the group terms across participants as performed by Catalina et. al.(2022) 
+and Piironen et. al., (2023). However, the unique identifier variable was not recorded 
+in our dataset which posed a limitation to its applicability in our case study. 
+
+
+```{r}
+## Posterior Predictive Variable Selection (Bayes@Lund, 2023; Piironen et. al.,2023; R Consortium,2023) using projpred (Piironen & Vehtari, 2017)
+
+library(dplyr)
+library(brms)
+library(ggplot2)
+library(tidyr)
+library(priorsense)
+library(projpred)
+library(optimx)
+library(posterior)
+library(bayesplot)
+
+# feature selection for model 4
+
+# instantiate the reference model
+ref_multi <- brm(
+  target_n ~ . + (1 | Course),
+  family = bernoulli(link=logit), 
+  data = train_data, 
+  prior = set_prior(R2D2()),
+  control = list(adapt_delta = 0.95),
+  file = 'reference_multilevel',
+  file_refit = 'on_change', 
+  seed = 42,
+  refresh = 0
+ )  
+
+# check if the model converges 
+ref_multi <- readRDS("ref_multi.rds")
+rstan::check_hmc_diagnostics(ref_multi$fit)
+summary(ref_multi)
+shinystan::launch_shinystan(ref_multi)
+```
+
+
+```{r}
+# basic posterior quantities 
+summary(ref_multi, priors = TRUE, robust = TRUE, mc_se = TRUE)
+```
+
+
+```{r}
+# predictive checks
+pp_check(ref_multi, ndraws = 100)
+```
+
+
+```{r}
+# preliminary run to determine proper number of features for cross validation
+cvvs_valsearch_multi <- cv_varsel(
+  ref_multi,                   
+  method = "forward",         
+  nterms_max = 36,
+  validate_search = FALSE,   
+  seed = 42           
+ )
+
+# save the search result
+saveRDS(cvvs_valsearch_multi, file = "cvvs_valsearch_multi.rds")
+
+cvvs_valsearch_multi <- readRDS('cvvs_valsearch_multi.rds')
+
+# plot performance vs. submodel size
+plot(cvvs_valsearch_multi, deltas = TRUE)
+```
+
+
+```{r}
+# final search with the preliminary result of optimal number of features
+cvvs_multi <- cv_varsel(
+  ref_multi,
+  method = 'forward',
+  projection = 'latent',      
+  validate_search = FALSE,
+  nterms_max = 8,
+  seed = 42
+ )
+
+# save the result to a file
+saveRDS(cvvs_multi, file = 'cvvs_multi.rds')   
+
+cvvs_multi <- readRDS('cvvs_multi.rds')
+
+# plot performance vs. submodel size
+plot(cvvs_multi, deltas=TRUE)
+
+# check the feature importance ranking
+ranking(cvvs_multi)
+```
+
+
+**Appendix D: Summary Diagnostics for the Reference Model used for Variable Selection** 
+*Note:* The plots referred to were excluded in this version to avoid cluttering the document
+The posterior predictive plot below shows that the reference model has a good fit 
+implying that the model captures the underlying structure of the data very well and 
+that the model is generating many plausible datasets.
+Additionally, all Bulk_ESS and Tail_ESS values were greater than 2400 and 2700 
+respectively indicating efficient sampling and good mixing of the chains in the 
+main and tail regions of the posterior distribution. Regarding convergence,  there 
+were no divergent transitions and all Rhat values were approximately 1 indicating 
+that the chains converged.
+
+**Appendix E: Variable Selection plot from preliminary forward search and evaluation using cv_varsel()** 
+The goal of the preliminary forward search is ideally to obtain the size of the 
+smallest optimal submodel with comparable performance to the reference model for 
+the (main) cv_varsel run inorder to reduce runtime. 
+The size of the smallest optimal sub model retrieved using projpred’s suggest_size() 
+method was 5. This is likely explainable by the point where the submodel achieves 
+comparable performance with the reference model in the Plot 2 and 3 below. However, 
+nterms_max was set to 6 in the main search and evaluation to allow for a slight 
+buffer in variable inclusion, ensuring that any marginally beneficial predictors 
+beyond the optimal size could be considered without significantly compromising 
+model parsimony 
+
+**Appendix F: Variable Selection Plot from Main CV Evaluation**
+Projpred was used for simple selection of important features to inform the construction 
+of some of the reduced models as a result, there was a slight deviation from the 
+original implementation according to the manual. This deviation involved performing 
+pp_check of the submodel outside of the recommended projpred pipeline for simplicity (Step 11). 
+The summary diagnostics of the submodel showed that all Bulk_ESS and Tail_ESS values 
+were greater than 1500 and rhat values were 1. The following predictors were selected 
+for the submodel; Curricular.units.2nd.sem..approved., Curricular.units.2nd.sem..enrolled, 
+Tuition.fees.up.to.date, Course and Curricular.units.1st.sem..approved. as shown 
+in plots 4, 5 and 6 below.
+
+**Appendix G: Variable Selection Plot from Main CV Evaluation**
+From the final predictive performance plot, the smallest submodel size that performs 
+comparably to the reference model is 5. However, the accuracy continues to improve up 
+to size 8 and expanding the size allows for a more diverse set of predictors that 
+can include two more features on financial situations besides academic activities. 
+Therefore, the final model will have the following variables as predictors.
