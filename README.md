@@ -1,4 +1,4 @@
-# Bayesian Data Analysis – Group Project
+# Bayesian Multilevel Model – Group Project
 
 ## Overview
 
