@@ -18,4 +18,4 @@ The objective was to apply **Bayesian multilevel modeling** using the `brms` pac
 
 ## Contributions
 
-My contribution includes dataset selection, Model 4 implementation in Sections 2 - 5, and Section 6 Interpretation of parameters
+My contribution includes dataset selection, Model 4 implementation in Sections 2 - 5 and feature selection, and Section 6 Interpretation of parameters
