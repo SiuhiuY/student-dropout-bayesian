@@ -2,7 +2,7 @@
 
 ## Overview
 
-This project was completed as part of the **Bayesian Data Analysis** course.  
+This project was completed as part of the **Bayesian Multilevel Models** course.  
 The objective was to apply **Bayesian multilevel modeling** using the `brms` package in R to a clustered dataset.
 
 ## Objectives
