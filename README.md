@@ -1,7 +1,7 @@
 # Predicting Student Dropout – Group Project
 
 ## Overview
-This project was completed as part of the **Bayesian Multilevel Models** course. The goal was to develop a practical understanding of Bayesian data analysis by applying multilevel modeling using the **brms** R package.
+This project was completed as part of the **Bayesian Multilevel Models** course. The goal was to develop a comprehensive understanding of Bayesian data analysis within data science using the **brms** R package.
 
 ## Objectives
 - Select and explore a dataset with a meaningful grouping structure
@@ -24,8 +24,15 @@ This uncertainty arises from both the parameters and the data:
 - **Data variability (Likelihood)**: The inherent noise in the observed data
 
 ### Modeling Logic
-- **Update**: After observing the data, prior beliefs are updated to form the **posterior distribution**.
-- **Predict**: The **posterior distribution** is then used to derive the **posterior predictive distribution**, which represents possible future observations
+- **Update**: After seeing the data, we update our prior beliefs about the parameters to form the **posterior distribution**.
+- **Predict**: We then use the **posterior distribution** to derive the **posterior predictive distribution**, which predicts future observations
 
+### Advantages
+- Provides **associated uncertainty** through full posterior and predictive distributions
+- Allows incorporation of **domain knowledge via priors**, helping constrain predictions to realistic ranges
+- Naturally handles **hierarchical data structures**, which is central to multilevel modeling
+- Performs well **data-scarce settings**, as it is not heavily dependent on large datasets
 
+### Disadvantages
+- Can be **computationally expensive**, especially for large datasets or complex models
 
